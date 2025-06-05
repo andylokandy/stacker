@@ -53,11 +53,15 @@ pub fn maybe_grow<R, F: FnOnce() -> R>(red_zone: usize, stack_size: usize, callb
         Some(remaining) => remaining >= red_zone,
         None => false,
     };
-    if enough_space {
+    let old_protected = is_protected();
+    set_protected(true);
+    let ret = if enough_space {
         callback()
     } else {
         grow(stack_size, callback)
-    }
+    };
+    set_protected(old_protected);
+    ret
 }
 
 /// Always creates a new stack for the passed closure to run on.
@@ -81,7 +85,10 @@ pub fn grow<R, F: FnOnce() -> R>(stack_size: usize, callback: F) -> R {
         *ret_ref = Some(taken_callback());
     };
 
+    let old_protected = is_protected();
+    set_protected(true);
     _grow(stack_size, dyn_callback);
+    set_protected(old_protected);
     ret.unwrap()
 }
 
@@ -92,6 +99,16 @@ pub fn grow<R, F: FnOnce() -> R>(stack_size: usize, callback: F) -> R {
 pub fn remaining_stack() -> Option<usize> {
     let current_ptr = current_stack_ptr();
     get_stack_limit().map(|limit| current_ptr.saturating_sub(limit))
+}
+
+/// Returns whether the current stack is protected by this library.
+///
+/// This function checks if current context is within `maybe_grow` or `grow` calls.
+/// It is useful to assert that `maybe_grow` or `grow` must be used for types or
+/// operations that potentially require stack growth.
+#[inline(always)]
+pub fn is_protected() -> bool {
+    PROTECTED.with(|p| p.get())
 }
 
 psm_stack_information!(
@@ -119,7 +136,8 @@ psm_stack_information!(
 thread_local! {
     static STACK_LIMIT: Cell<Option<usize>> = Cell::new(unsafe {
         backends::guess_os_stack_limit()
-    })
+    });
+    static PROTECTED: Cell<bool> = Cell::new(false);
 }
 
 #[inline(always)]
@@ -131,6 +149,11 @@ fn get_stack_limit() -> Option<usize> {
 #[allow(unused)]
 fn set_stack_limit(l: Option<usize>) {
     STACK_LIMIT.with(|s| s.set(l))
+}
+
+#[inline(always)]
+fn set_protected(p: bool) {
+    PROTECTED.with(|s| s.set(p));
 }
 
 psm_stack_manipulation! {
